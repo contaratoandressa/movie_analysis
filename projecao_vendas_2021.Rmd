@@ -1,0 +1,310 @@
+---
+title: "Predição de Vendas de Bilheteria"
+author: "Andressa Contarato"
+date: "Julho 17, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objetivo
+
+Criação de um modelo que seja capaz de estimar as vendas médias mensais por gênero de filmes em 2021.
+
+```{r, echo=FALSE, warning=FALSE}
+# packages (without show instalation)
+rm(list=ls())
+packages <- c("readxl", "knitr", "tidyr", "dplyr", "ggplot2", "plotly", "e1071","plyr", "magick","corrplot", "Hmisc","PerformanceAnalytics", "lmtest","sandwich")
+if ( length(missing_pkgs <- setdiff(packages, rownames(installed.packages()))) > 0) {
+  message("Installing missing package(s): ", paste(missing_pkgs, collapse = ", "))
+  install.packages(missing_pkgs)
+}
+```
+
+
+```{r, echo=FALSE, warning=FALSE}
+# datasets
+data <- readxl::read_excel("estudo_de_caso_-_cientista_de_dados.xlsx")
+google_trends = read.csv("google_trends2.csv")
+ipea = readxl::read_excel("ipeadata[14-07-2020-09-52].xls")
+americano = read.csv("americano.csv")
+```
+
+## Análise Descritiva
+
+1. O primeiro passo foi criar um dicionário de dados disponível no github.
+2. A base tem 7 colunas, cada uma contendo uma variável (ou atributo) com 91200 observações.
+3. Os nomes das variáveis são: **Filme**, **Datas das Vendas**, **Estreia**, **Dias de Vendas após a Estréia**, **Genero do Filme**, **Tickets vendidos Pela Ingresso.com**, **Tickets vendidos pelo Cinema**.
+4. Somente a variável Estreia apresenta valores faltantes, que podem ocasionar erros de medidas no modelo final.
+5. Tipologia das variáveis:
+  + Nomes sem padrão, com acentos, espaços e extensos, caso passe para um banco de dados deverá ser tratado
+  + Filme: texto, padronizado em caixa alta sem acento
+  + Datas das Vendas: formato data
+  + Estreia: formato data, data mínima de 2013 nao condizendo com Datas das Vendas que se inicia em 2017
+  + Dias de Vendas após a Estréia: texto sem padronização e com caracteres especiais
+  + Genero do Filme: texto, sem padronização, com caracteres especiais
+  + Tickets vendidos Pela Ingresso.com: numérico, com valores 0
+  + Tickets vendidos pelo Cinema: numérico, com valores 0
+6. Análise variáveis numéricas: 
+  + Ingresso.com: em média o volume de tickets vendidos é de 174,69, o maior valor foi de 211096,23. Mesmo com uma diferença grande há filmes com sucesso de bilheteria e outros não, além de casos de outliers. O maior valor se refere ao filme "VINGADORES ULTIMATO" no ano de 2019. A mediana (valor que separa 50% do volume de tickets vendidos acima e abaixo) é de 0,68, ou seja, há muitos dias em que diversos filmes não tiveram um ticket comprado.
+  + Cinema: a média é mais alta que a da Ingresso.com, de 2347,10. O maior valor foi de 635212,7 (também de "VINGADORES ULTIMATO") e a mediana de 22,8.
+  + O gráfico de boxpot para entender a distribuição dos dados, mostrou valores muito discrepantes, que pode ser denotado como outliers na amostra.
+7. Análise variáveis de data:
+   + Estreia: apresenta valores faltantes, e se inicia em 2013.
+   + Datas das Vendas: não apresenta valores faltantes, mas se inicia em 2017. Sendo recomendável truncar o dataset em 2017 a 2020.
+8. Análise variáveis string (texto):
+  + Filme: apresenta 3564 filmes distintos, sendo "TURMA DA MONICA  LACOS" o de maior ocorrência
+  + Genero do Filme: apresenta 74 classes, sendo "Drama" o mais recorrente
+  + Dias de Vendas após a Estréia: tem 111 períodos diferentes, com "Mais de 100 dias da data de estreia" aparecendo mais vezes.
+
+```{r, echo=FALSE, warning=FALSE}
+# descriptive analysis
+summary(data[,c("Tickets vendidos Pela Ingresso.com", "Tickets vendidos pelo Cinema")])
+print("Sucesso de bilheteria em Ingresso.com e Cinemas respectivamente")
+dplyr::filter(data, data$`Tickets vendidos Pela Ingresso.com` == max(data$`Tickets vendidos Pela Ingresso.com`))
+dplyr::filter(data, data$`Tickets vendidos pelo Cinema` == max(data$`Tickets vendidos pelo Cinema`))
+
+print("Período inicial de tempo dos dados de Datas das Vendas e Estreia respectivamente: ")
+apply(data[,c("Datas das Vendas", "Estreia")], 2, function(x){min(x, na.rm = T)})
+print("Período final de tempo dos dados de Datas das Vendas e Estreia respectivamente: ")
+apply(data[,c("Datas das Vendas", "Estreia")], 2, function(x){max(x, na.rm = T)})
+
+freq = function(x){
+  #return(prop.table(table(x)))
+  return(length(unique(x)))
+}
+print("Quantidade de classes das variáveis: ") 
+apply(data[,c("Filme","Genero do Filme","Dias de Vendas após a Estréia")], 2, freq)
+
+print("Moda de: ")
+getmode <- function(v) {
+  uniqv <- unique(v)
+  uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+apply(data[,c("Filme","Genero do Filme","Dias de Vendas após a Estréia")], 2, getmode)
+
+x = aggregate(data$`Datas das Vendas`, by = list(data$Filme), FUN = length)
+x = x[order(x$x, decreasing = T),]
+names(x) = c("Filme", "Quantidades de dias")
+print("Top filmes com mais compra de ingressos: ")
+x[0:5,]
+print("Top 5 filmes com menos compra de ingressos: ")
+x[(nrow(x)-4):(nrow(x)),]
+
+x = aggregate(data$`Datas das Vendas`, by = list(data$Filme), FUN = length)
+x = x[order(x$x, decreasing = T),]
+names(x) = c("Genero", "Quantidades de dias")
+print("Top Gênero de Filmes com mais compra de ingressos: ")
+x[0:5,]
+print("Top 5 Gênero de Filmes com menos compra de ingressos: ")
+x[(nrow(x)-4):(nrow(x)),]
+
+x = aggregate(data$Filme, by = list(data$`Dias de Vendas após a Estréia`), FUN = length)
+x = x[order(x$x, decreasing = T),]
+barplot(x$x, col = "blue", main = "Distibuição dos dados por Dias de Vendas após a Estréia", xlim = c(0,140), names.arg = x$Group.1, cex.names = 1)
+print("Top 5 dias com mais compra de ingressos: ")
+x[0:5,]
+print("Top 5 dias com menos compra de ingressos: ")
+x[(nrow(x)-4):(nrow(x)),]
+
+data$ano = strftime(data$Estreia, "%Y", tz = "UTC")
+data$ano_venda = strftime(data$`Datas das Vendas`, "%Y", tz = "UTC")
+
+boxplot(data[,c("Tickets vendidos Pela Ingresso.com", "Tickets vendidos pelo Cinema")])
+
+qt_um = function(x){
+  x = unique(x)
+  for(i in 1:length(x)){
+
+    if(nchar(x[i]) <= 1){
+      print(x[i])
+    }  
+  }
+}
+print(paste0("Filmes com nomes menores ou iguais a um caracter: ", apply(data[,"Filme"], 2, qt_um)))
+```
+
+## Extract, Transform, Load
+
+Após a inspeção dos dados foi feita a reestruturação para uma base mais limpa e acertiva de se trabalhar a modelagem. Foi feito o seguinte pseudo-código para o tratamento dos dados:
+
+1. Estreia: truncar datas em 2017 como minimo e valores NA
+2. Genero do Filme: remover N/A, ?, padronizar e analisar palavras no plural e singular
+3. Datas de Venda Após Estréia: recriar datas de venda após estreia
+4. Inspecionar valores 0 em Tickets vendidos Pela Ingresso.com
+5. Inspecionar valores 0 em Tickets vendidos pelo Cinema
+6. Inspecionar valores 0 em Tickets vendidos Pela Ingresso.com e Tickets vendidos pelo Cinema
+7. Criação da variável: americano = 1 se o filme é estrangeiro, 0 c.c.
+8. Ao final, a bse consiste em 75948 observações, a criação de duas variáveis ano, ano de vendas e ano de estréia, contendo 11 variáveis no total.
+
+```{r, echo=FALSE, warning=FALSE}
+# etl
+# Estreia: truncar datas em 2017 como minimo e valores NA
+data$ano = strftime(data$Estreia, "%Y", tz = "UTC")
+data$ano_venda = strftime(data$`Datas das Vendas`, "%Y", tz = "UTC")
+
+print(paste0("Removendo ", dim(data[which(is.na(data$ano) == T),])[1], " do dataset."))
+data = data[which(is.na(data$ano) == F),]
+print("Removido NA, transformando em numeric: ")
+data$ano = as.numeric(data$ano)
+data$ano_venda = as.numeric(data$ano_venda)
+print("Inspecionando datas antes de 2017: ")
+print(paste0("Truncando datas de 2017 até 2020, com remoção de ", dim(dplyr::filter(data, ano < 2017))[1], " linhas do dataset."))
+data = dplyr::filter(data, ano >= 2017)
+
+# Genero do Filme: remover N/A, ?, padronizar e analisar palavras no plural e singular
+print("Consequentemente os valores N/A e ? foram removidos da variavel Genero do Filme: ")
+print("Quantidade de linhas com valores faltantes em gênero: ")
+dim(dplyr::filter(data, data$`Genero do Filme` %in% c("?", "N/A")))
+data = dplyr::filter(data, !data$`Genero do Filme` %in% c("?", "N/A"))
+print("Padronização")
+data$`Genero do Filme` = stringi::stri_trans_general(data$`Genero do Filme`, "Latin-ASCII")
+data$`Genero do Filme` = toupper(data$`Genero do Filme`)
+print(paste0("De 74 gêneros únicos, passou para: ", length(unique(data$`Genero do Filme`))))
+
+# Datas de Venda Após Estréia: recriar datas de venda após estreia
+print("Variável: Datas de Vendas Após a Estréia com NA: ")
+dplyr::filter(data, data$`Dias de Vendas após a Estréia` == "Falha ao retonar data estreia")
+data$dia_estreia_novo = as.Date(strftime(data$`Datas das Vendas`, "%Y/%m/%d")) - as.Date(strftime(data$Estreia, "%Y/%m/%d"))
+
+# Inspecionar valores 0 em Tickets vendidos Pela Ingresso.com
+print(paste0("Valor de bilheteria da ingressos.com dos filmes listados acima: ", "Suposição de falhas técnicas."))
+dplyr::filter(data, data$`Tickets vendidos Pela Ingresso.com` == 0)
+
+# Inspecionar valores 0 em Tickets vendidos pelo Cinema
+print(paste0("Valor de bilheteria dos cinemas dos filmes listados acima: ", "Suposição de falhas técnicas."))
+dplyr::filter(data, data$`Tickets vendidos pelo Cinema` == 0)
+
+# Inspecionar valores 0 em Tickets vendidos Pela Ingresso.com e Tickets vendidos pelo Cinema
+dplyr::filter(data, data$`Tickets vendidos pelo Cinema` == 0 & data$`Tickets vendidos Pela Ingresso.com` == 0)
+print("Suposição: pode ter ocorrido falha técnica neste dia, mas não será removido, mas sim inspecionado futuramente para maiores insights")
+
+print("estatisticas resumo da base tratada: ")
+dim(data)
+summary(data[,c(6,7)])
+```
+
+## Modelo 
+
+O processo de construção do modelo seguiu o seguinte pseudo-código:
+
+1. Join de dados originais com variável **Americano**, com 1 se filme americano e 0 c.c.
+2. Agregação dos dados por data da estréia.
+3. Seleção das variáveis a serem usadas no modelo.
+  + Importação da base "americanos.csv" onde se tem a variável "americano" 1 se o filme é americano e 0 c.c., baseado num estudo do artigo abaixo
+  + Importação da base "ipea.csv" onde se quer usar a variável evn = Expectativa de Vida ao Nascer, segundo o artigo também abaixo
+  + Uso das redes sociais com a importação da base "google_trends.csv" para se entender a busca por cinemas e ingressos
+4. Foi feito a separação de dados de treino e de teste, com 70% para treino e 30% para teste, como se é usado.
+5. Foram analisados algumas associações das variáveis para não ter problemas de multicolinearidade mais adiante.
+6. Iniciou-se com o modelo: modelo = lm(ingresso ~ prop_cinema + evn  + google_trends + genero, data = data), de acordo com o método de backward selection, e foi retirando as variáveis de acordo com a não significância delas no modelo. Considerando alpha = 1%.
+7. A comparação do melhor modelo se deu através da estatística AIC.
+8. Foi criado o indicador prop_cinema que é a taxa de tickets nos cinemas em comparação com o total (ingresso.com e cinema).
+9. O modelo final foi: modelo_final = lm(ingresso ~ evn + google_trends + prop_cinema + genero, data = train), com a remoção de dois gêneros de filmes não significativos, a saber: ""CLASSICO","COMEDIA E TERROR","COMEDIA ROMANTICA","CURTA","LIVRE","ROCK","THRILLER".
+
+```{r, echo=FALSE, warning=FALSE}
+# model
+names(americano)[1] = names(data)[1] 
+data = dplyr::left_join(data, americano, by = "Filme")
+data[which(is.na(data$Americano) == T), 11] = 0
+filmes_americanos <- magick::image_read('filmes_americanos.png')
+print(filmes_americanos)
+
+data$new_data = strftime(data$Estreia, "%Y")
+data1 = aggregate(data$`Tickets vendidos Pela Ingresso.com`, by = list(data = data$new_data, genero = data$`Genero do Filme`), FUN = sum)
+data2 = aggregate(data$`Tickets vendidos pelo Cinema`, by = list(data = data$new_data, genero = data$`Genero do Filme`), FUN = sum)
+
+data1$ID = paste0(data1$data," ", data1$genero)
+data2$ID = paste0(data2$data," ", data2$genero)
+data = dplyr::left_join(data1, data2, by = "ID")
+data = data[,c(1,2,3,7)]
+names(data) = c("data","genero","ingresso","cinema")
+data$data = as.numeric(data$data)
+
+google_trends$data = as.numeric(substr(google_trends$ano_mes, 1, 4))
+google_trends = aggregate(google_trends$volume, by = list(data = google_trends$data), FUN = sum)
+data = dplyr::left_join(data, google_trends, by = "data")
+
+names(ipea) = c("data", "evn")
+ipea$data = as.numeric(ipea$data)
+data = dplyr::left_join(data, ipea, by = "data")
+
+names(data) = c("data","genero","ingresso","cinema","google_trends","evn")
+data$google_trends = ifelse(is.na(data$google_trends),0,data$google_trends)
+data$evn = ifelse(is.na(data$evn),0,data$evn)
+data$evn = ifelse(data$evn == 0,mean(data$evn),data$evn)
+data$prop_cinema = round(data$cinema/(data$cinema+data$ingresso),3)
+
+print("Resumo dos dados para aplicar o modelo: ")
+names(data)
+dim(data)
+summary(data[,c(3,4,5,6)])
+apply(data[,c(1,2)], 2, getmode)
+
+res = cor(data[,c("ingresso", "cinema", "google_trends", "evn")])
+corrplot::corrplot(res, type = "upper", order = "hclust", tl.col = "black", tl.srt = 50)
+PerformanceAnalytics::chart.Correlation(data[,c("ingresso", "cinema", "google_trends", "evn")], histogram=TRUE, pch=19)
+
+set.seed(123)  # setting seed to reproduce results of random sampling
+train_sample <- sample(1:nrow(data), 0.7*nrow(data))  #  training and testing: 70/30 split
+train <- data[train_sample, ]  # training data
+test  <- data[-train_sample, ]   # test data
+
+train = dplyr::filter(train, !genero %in% c("CLASSICO","COMEDIA E TERROR","COMEDIA ROMANTICA","CURTA","LIVRE","ROCK","THRILLER"))
+mod1 = lm(ingresso ~ google_trends + prop_cinema +genero, data = train)
+summary(mod1)
+AIC(mod1)
+
+print("modelo final: modelo_final = lm(ingresso ~ google_trends + prop_cinema +genero, data = train)")
+```
+
+## Diagnóstico dos resíduos
+
+Após ser feito o modelo é preciso validar as hipóteses a cerca da construção deste, olhando os resíduos. O teste dos resíduos mostrou a aderência dos dados confirmando a hipótese de normalidade. A análise da distância de Cook mostrou as posições de alguns pontos influentes no modelo. Podendo ser melhor analisados para sua retirada ou não da base de dados.
+
+```{r, echo=FALSE, warning=FALSE}
+# redisual diagnostics
+print("Resíduos vs values ajustados")
+plot(mod1, pch=16, col="blue", lty=1, lwd=2, which=1)
+
+print("Teste de normalidade dos resíduos")
+plot(mod1, pch=16, col="blue", lty=1, lwd=2, which=2)
+
+print("Distância de COKK-pontos influentes")
+plot(mod1, pch=16, col="blue", lty=1, lwd=2, which=4)
+
+```
+
+## Predição
+
+Ao final foi feita a validação dos dados de treino para com os dados de teste. E, logo após foi feita a predição para o ano de 2021 para cada gênero por meio dos coeficientes obtidos no modelo. Considerando os demais gêneros iguais a 0 e o e-ésimo será predito. Os dados de google trends, evn e de tickets foram preditos por meio de analise de séries temporais, com a modelagem da distribuição GHSkew, por ter caudas mais pesadas e modelar melhor dados mais anômalos na amostra devido ao quadro que vivemos de pandemia atualmente.
+
+1. Valor de volume de buscas no Google Trends no ano de 2021: 3500 buscas aproximadamente.
+2. Valor de taxa de tickets no ano de 2021: 0.75 para a taxa de tickets no cinema. Para este usou-se a média dos últimos meses referentes a pandemia.
+
+## Melhorias
+
+1. Uso de modelos de anomalias.
+2. Analisar as categorias retiradas da modelagem para futuras melhorias.
+3. Determinar cenários (Bom, Regular e Crítico).
+4. Estudo de casos em outros países.
+5. Oferecer serviços diversificados na sala de cinema, ao retornar, como: shows ao vivo, 
+6. Oferecer em épocas de quarentena serviços em casa, como:
+  + maratona de cinemas
+  + adote um filme (a pessoa paga para ter prioridade na sala de cinema e ganha descontos em outros filmes do gênero)
+  + focar em idosos com distribuição de filmes antigos
+  + focar em crianças com distribuição de filmes infantis
+  + competição de criação de histórias
+7. Uso de métodos emsemble para analisar modelos como SVR, Árvores de Regressão e ANN conjuntamente.
+
+## Referências
+
+1. Modelo de anomalias: https://cran.r-project.org/web/packages/anomalize/vignettes/anomalize_methods.html
+2. Modelo de predição: https://rpubs.com/bitettir/simpleregression
+3. Métodos Emsemble: https://rpubs.com/monoboy/ensemble
+4. Métodos Emsemble: https://www.rpubs.com/examkartikeya/Ensemble
+5. Métodos Emsemble: https://rpubs.com/fangya/svr
+6. Méotod Emsemble: https://machinelearningmastery.com/machine-learning-ensembles-with-r/
+7. Leitura de imagens: https://cran.r-project.org/web/packages/magick/vignettes/intro.html
+8. Modelo de Regressão Linear Múltipla com Variáveis categóricas: https://rpubs.com/cyobero/187387
