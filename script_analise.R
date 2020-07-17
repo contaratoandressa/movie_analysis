@@ -1,7 +1,7 @@
 rm(list=ls())
 
 # packages
-install.load::install_load("readxl", "knitr", "tidyr", "dplyr", "ggplot2", "plotly", 
+install.load::install_load("lmtest","readxl", "knitr", "tidyr", "dplyr", "ggplot2", "plotly", 
                            "e1071","plyr", "magick","corrplot", "Hmisc","PerformanceAnalytics", "lmtest","sandwich",
                            "PortfolioAnalytics", "quantmod", "nnet", "caret", "zoo","writexl","tseries", "moments",
                            "forecast", "polynom", "rugarch", "xts","SkewHyperbolic") #rgl
@@ -243,6 +243,8 @@ summary(mod1)
 AIC(mod1)
 
 # Diagnostico residuos
+
+lmtest::bptest(mod1)
 
 print("Teste de Normalidade dos resíduos")
 shapiro.test(residuals(mod1))
